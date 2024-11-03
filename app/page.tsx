@@ -338,7 +338,8 @@ export default function FullScreenDrawingImprovedAnimation() {
       width: cropWidth,
       height: cropHeight,
       workerScript: '/gif.worker.js',
-      transparent: gifTransparency ? 'rgba(0,0,0,0)' : null
+      transparent: gifTransparency ? 'rgba(0,0,0,0)' : null,
+      background: gifTransparency ? null : '#ffffff'
     })
 
     const totalFrames = Math.ceil(duration * FPS)
@@ -365,6 +366,10 @@ export default function FullScreenDrawingImprovedAnimation() {
           canvas.height = cropHeight
           const ctx = canvas.getContext('2d')
           if (ctx) {
+            if (!gifTransparency) {
+              ctx.fillStyle = '#ffffff'
+              ctx.fillRect(0, 0, cropWidth, cropHeight)
+            }
             ctx.drawImage(img, -minX + 10, -minY + 10) // Adjust for padding
             gif.addFrame(canvas, { copy: true, delay: 1000 / FPS })
           }
