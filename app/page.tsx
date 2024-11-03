@@ -22,7 +22,7 @@ interface Path {
   size: number
 }
 
-const DEFAULT_COLORS = ['#1E00D2', '#0ACF83', '#A259FF', '#F24E1E', '#FF7262', '#1ABCFE']
+const DEFAULT_COLORS = ['#000000', '#1E00D2', '#0ACF83', '#A259FF', '#F24E1E', '#FF7262', '#1ABCFE']
 const DEFAULT_SIZE = 4
 const MIN_SIZE = 1
 const MAX_SIZE = 20
@@ -48,6 +48,8 @@ export default function FullScreenDrawingImprovedAnimation() {
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
   const [isExporting, setIsExporting] = useState(false)
   const [gifTransparency, setGifTransparency] = useState(true)
+  const [svgFileName, setSvgFileName] = useState('drawing.svg')
+  const [gifFileName, setGifFileName] = useState('animated-drawing.gif')
 
   useEffect(() => {
     const updateDimensions = () => {
@@ -302,8 +304,7 @@ export default function FullScreenDrawingImprovedAnimation() {
       const svgData = new XMLSerializer().serializeToString(svgClone)
       const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
 
-      const fileName = prompt('Enter file name', 'drawing.svg') || 'drawing.svg'
-      FileSaver.saveAs(svgBlob, fileName)
+      FileSaver.saveAs(svgBlob, svgFileName)
     }
   }
 
@@ -379,7 +380,7 @@ export default function FullScreenDrawingImprovedAnimation() {
     }
 
     gif.on('finished', (blob: Blob) => {
-      FileSaver.saveAs(blob, 'animated-drawing.gif')
+      FileSaver.saveAs(blob, gifFileName)
       setIsExporting(false)
     })
 
@@ -466,7 +467,7 @@ export default function FullScreenDrawingImprovedAnimation() {
                   aria-label="Select color"
                 />
               </PopoverTrigger>
-              <PopoverContent className="w-40">
+              <PopoverContent className="w-56">
                 <div className="flex flex-wrap gap-2">
                   {DEFAULT_COLORS.map((color) => (
                     <Button
@@ -479,6 +480,15 @@ export default function FullScreenDrawingImprovedAnimation() {
                       aria-label={`Select ${color} color`}
                     />
                   ))}
+                  <div className="flex items-center">
+                    <input
+                      type="color"
+                      value={currentColor}
+                      onChange={(e) => setCurrentColor(e.target.value)}
+                      className="w-8 h-8 rounded-full cursor-pointer"
+                      aria-label="Select custom color"
+                    />
+                  </div>
                 </div>
               </PopoverContent>
             </Popover>
@@ -531,16 +541,32 @@ export default function FullScreenDrawingImprovedAnimation() {
                     <Save className="h-4 w-4" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-56">
+                <PopoverContent className="w-72">
                   <div className="grid gap-4">
-                    <Button onClick={downloadSVG} className="w-full justify-start">
-                      <Save className="mr-2 h-4 w-4" />
-                      Download SVG
-                    </Button>
-                    <Button onClick={downloadGIF} className="w-full justify-start">
-                      <ImageIcon className="mr-2 h-4 w-4" />
-                      Download GIF
-                    </Button>
+                    <div className="grid gap-2">
+                      <Label htmlFor="svg-filename">SVG Filename</Label>
+                      <Input
+                        id="svg-filename"
+                        value={svgFileName}
+                        onChange={(e) => setSvgFileName(e.target.value)}
+                      />
+                      <Button onClick={downloadSVG} className="w-full justify-start">
+                        <Save className="mr-2 h-4 w-4" />
+                        Download SVG
+                      </Button>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="gif-filename">GIF Filename</Label>
+                      <Input
+                        id="gif-filename"
+                        value={gifFileName}
+                        onChange={(e) => setGifFileName(e.target.value)}
+                      />
+                      <Button onClick={downloadGIF} className="w-full justify-start">
+                        <ImageIcon className="mr-2 h-4 w-4" />
+                        Download GIF
+                      </Button>
+                    </div>
                     <div className="flex items-center space-x-2">
                       <Switch
                         id="gif-transparency"
