@@ -11,7 +11,6 @@ import FileSaver from 'file-saver'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import GIF from 'gif.js'
 import { Switch } from "@/components/ui/switch"
-import Image from 'next/image'
 
 // IMPORTANT: Download the GIF worker script from:
 // https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js
@@ -52,7 +51,7 @@ export default function FullScreenDrawingImprovedAnimation() {
   const [gifTransparency, setGifTransparency] = useState(false) // Changed to false by default
   const [svgFileName, setSvgFileName] = useState('drawing.svg')
   const [gifFileName, setGifFileName] = useState('animated-drawing.gif')
-  const [jitter, setJitter] = useState(0)
+  const [jitter, setJitter] = useState(1) // Updated initial jitter value
   const [simultaneousAnimation, setSimultaneousAnimation] = useState(false)
   //Removed smoothing
   //const [smoothing, setSmoothing] = useState(0.5)
@@ -94,36 +93,28 @@ export default function FullScreenDrawingImprovedAnimation() {
       if (!startTime) startTime = timestamp
       const elapsedTime = timestamp - startTime
 
-      if (simultaneousAnimation) {
-        // Simultaneous animation (all paths at once)
-        pathElements.forEach((pathElement) => {
-          const length = pathElement.getTotalLength()
-          const progress = Math.min(elapsedTime / animationDuration, 1)
-          pathElement.style.strokeDasharray = `${length} ${length}`
-          pathElement.style.strokeDashoffset = `${length * (1 - progress)}`
-        })
-      } else {
-        // Sequential animation (one path at a time)
-        const totalLength = Array.from(pathElements).reduce((sum, path) => sum + path.getTotalLength(), 0)
-        let accumulatedLength = 0
+      pathElements.forEach((pathElement, index) => {
+        const originalPath = paths[index]
+        const length = pathElement.getTotalLength()
+        let progress: number
 
-        pathElements.forEach((pathElement) => {
-          const length = pathElement.getTotalLength()
-          const startOffset = (accumulatedLength / totalLength) * animationDuration
-          const endOffset = ((accumulatedLength + length) / totalLength) * animationDuration
+        if (simultaneousAnimation) {
+          progress = Math.min(elapsedTime / animationDuration, 1)
+        } else {
+          const totalLength = paths.reduce((sum, path) => sum + path.points.length, 0)
+          const startOffset = paths.slice(0, index).reduce((sum, path) => sum + path.points.length, 0) / totalLength
+          const endOffset = (startOffset + originalPath.points.length / totalLength)
+          progress = Math.max(0, Math.min((elapsedTime / animationDuration - startOffset) / (endOffset - startOffset), 1))
+        }
 
-          if (elapsedTime > startOffset) {
-            const progress = Math.min((elapsedTime - startOffset) / (endOffset - startOffset), 1)
-            pathElement.style.strokeDasharray = `${length} ${length}`
-            pathElement.style.strokeDashoffset = `${length * (1 - progress)}`
-          } else {
-            pathElement.style.strokeDasharray = `${length} ${length}`
-            pathElement.style.strokeDashoffset = `${length}`
-          }
+        // Use the actual shaken points
+        const visiblePoints = originalPath.points.slice(0, Math.ceil(originalPath.points.length * progress))
+        const pathData = `M ${visiblePoints.map(p => `${p.x},${p.y}`).join(' L ')}`
 
-          accumulatedLength += length
-        })
-      }
+        pathElement.setAttribute('d', pathData)
+        pathElement.style.strokeDasharray = `${length} ${length}`
+        pathElement.style.strokeDashoffset = `${length * (1 - progress)}`
+      })
 
       if (elapsedTime < animationDuration) {
         animationRef.current = requestAnimationFrame(animate)
@@ -133,7 +124,7 @@ export default function FullScreenDrawingImprovedAnimation() {
     }
 
     animationRef.current = requestAnimationFrame(animate)
-  }, [duration, simultaneousAnimation])
+  }, [duration, simultaneousAnimation, paths, jitter])
 
   useEffect(() => {
     if (isAnimating && paths.length > 0) {
@@ -181,14 +172,15 @@ export default function FullScreenDrawingImprovedAnimation() {
     const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top
 
     const time = Date.now()
-    const newPoint = { x, y, time }
+    const shake = Math.sin(time * 0.1) * jitter * 4 * (Math.random() - 0.5)
+    const newPoint = { x: x + shake, y: y + shake, time }
 
     setPaths(prev => {
       const newPaths = [...prev]
       const currentPath = newPaths[newPaths.length - 1]
       currentPath.points.push(newPoint)
 
-      // Redraw the entire path with shaking effect
+      // Redraw the entire path
       ctx.strokeStyle = currentPath.color
       ctx.lineWidth = currentPath.size
       ctx.lineCap = 'round'
@@ -196,14 +188,10 @@ export default function FullScreenDrawingImprovedAnimation() {
 
       ctx.beginPath()
       currentPath.points.forEach((point, index) => {
-        const shake = Math.sin(point.time * 0.1) * jitter
-        const shakex = point.x + shake
-        const shakey = point.y + shake
-
         if (index === 0) {
-          ctx.moveTo(shakex, shakey)
+          ctx.moveTo(point.x, point.y)
         } else {
-          ctx.lineTo(shakex, shakey)
+          ctx.lineTo(point.x, point.y)
         }
       })
       ctx.stroke()
@@ -214,7 +202,7 @@ export default function FullScreenDrawingImprovedAnimation() {
       return newPaths
     })
 
-    setPrevPoint({ x, y })
+    setPrevPoint(newPoint)
   }
 
   const endDrawing = () => {
@@ -265,14 +253,10 @@ export default function FullScreenDrawingImprovedAnimation() {
       ctx.lineWidth = path.size
       ctx.beginPath()
       path.points.forEach((point, index) => {
-        const shake = Math.sin(point.time * 0.1) * jitter
-        const shakex = point.x + shake
-        const shakey = point.y + shake
-
         if (index === 0) {
-          ctx.moveTo(shakex, shakey)
+          ctx.moveTo(point.x, point.y)
         } else {
-          ctx.lineTo(shakex, shakey)
+          ctx.lineTo(point.x, point.y)
         }
       })
       ctx.stroke()
@@ -403,34 +387,28 @@ export default function FullScreenDrawingImprovedAnimation() {
     for (let frame = 0; frame <= totalFrames; frame++) {
       const progress = frame / totalFrames
 
-      if (simultaneousAnimation) {
-        // Simultaneous animation (all paths at once)
-        pathElements.forEach((pathElement) => {
-          const length = pathElement.getTotalLength()
-          pathElement.style.strokeDasharray = `${length} ${length}`
-          pathElement.style.strokeDashoffset = `${length * (1 - progress)}`
-        })
-      } else {
-        // Sequential animation (one path at a time)
-        let accumulatedLength = 0
+      pathElements.forEach((pathElement, index) => {
+        const originalPath = paths[index]
+        const length = pathElement.getTotalLength()
+        let pathProgress: number
 
-        pathElements.forEach((pathElement) => {
-          const length = pathElement.getTotalLength()
-          const startOffset = accumulatedLength / totalLength
-          const endOffset = (accumulatedLength + length) / totalLength
+        if (simultaneousAnimation) {
+          pathProgress = progress
+        } else {
+          const totalLength = paths.reduce((sum, path) => sum + path.points.length, 0)
+          const startOffset = paths.slice(0, index).reduce((sum, path) => sum + path.points.length, 0) / totalLength
+          const endOffset = (startOffset + originalPath.points.length / totalLength)
+          pathProgress = Math.max(0, Math.min((progress - startOffset) / (endOffset - startOffset), 1))
+        }
 
-          if (progress > startOffset) {
-            const pathProgress = Math.min((progress - startOffset) / (endOffset - startOffset), 1)
-            pathElement.style.strokeDasharray = `${length} ${length}`
-            pathElement.style.strokeDashoffset = `${length * (1 - pathProgress)}`
-          } else {
-            pathElement.style.strokeDasharray = `${length} ${length}`
-            pathElement.style.strokeDashoffset = `${length}`
-          }
+        // Use the actual shaken points
+        const visiblePoints = originalPath.points.slice(0, Math.ceil(originalPath.points.length * pathProgress))
+        const pathData = `M ${visiblePoints.map(p => `${p.x},${p.y}`).join(' L ')}`
 
-          accumulatedLength += length
-        })
-      }
+        pathElement.setAttribute('d', pathData)
+        pathElement.style.strokeDasharray = `${length} ${length}`
+        pathElement.style.strokeDashoffset = `${length * (1 - pathProgress)}`
+      })
 
       const svgData = new XMLSerializer().serializeToString(svgClone)
       const img = new Image()
@@ -557,7 +535,7 @@ export default function FullScreenDrawingImprovedAnimation() {
                     />
                   ))}
                   <div className="flex items-center justify-center w-8 h-8 rounded-full overflow-hidden border-2 border-primary relative">
-                    <Image
+                    <img
                       src="/images/color_picker.png"
                       alt="Custom color picker"
                       width={32}
@@ -595,11 +573,12 @@ export default function FullScreenDrawingImprovedAnimation() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="jitter-slider">Jitter:</Label>
+                    <Label htmlFor="jitter-slider">Shake Intensity:</Label>
+                    {/* Updated jitter slider */}
                     <Slider
                       id="jitter-slider"
                       min={0}
-                      max={5}
+                      max={10}
                       step={0.1}
                       value={[jitter]}
                       onValueChange={(value) => {
