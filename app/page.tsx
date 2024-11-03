@@ -204,7 +204,7 @@ export default function FullScreenDrawingImprovedAnimation() {
         pathElement.style.strokeDashoffset = `${length}`
         pathElement.style.transition = 'none'
       })
-      void svgRef.current.getBBox() // Force reflow
+      void svgRef.current.offsetWidth // Force reflow
     }
   }
 
@@ -280,16 +280,17 @@ export default function FullScreenDrawingImprovedAnimation() {
       width: dimensions.width,
       height: dimensions.height,
       workerScript: '/gif.worker.js',
+      transparent: 'rgba(0,0,0,0)'
     })
 
     const totalFrames = Math.ceil(duration * FPS)
     const svgClone = svgRef.current.cloneNode(true) as SVGSVGElement
-    svgClone.style.backgroundColor = 'white'
+    // svgClone.style.backgroundColor = 'white' // Removed line
 
     for (let frame = 0; frame <= totalFrames; frame++) {
       const progress = frame / totalFrames
       const pathElements = svgClone.querySelectorAll('path')
-      
+
       pathElements.forEach((pathElement) => {
         const length = pathElement.getTotalLength()
         pathElement.style.strokeDasharray = `${length} ${length}`
@@ -307,11 +308,9 @@ export default function FullScreenDrawingImprovedAnimation() {
           canvas.height = dimensions.height
           const ctx = canvas.getContext('2d')
           if (ctx) {
-            ctx.fillStyle = 'white'
-            ctx.fillRect(0, 0, canvas.width, canvas.height)
+            // Removed white background fill
             ctx.drawImage(img, 0, 0)
-            // Fix: Pass the canvas element instead of the context
-            gif.addFrame(canvas, { copy: true, delay: 1000 / FPS })
+            gif.addFrame(canvas, { copy: true, delay: 1000 / FPS, transparent: 0 })
           }
           resolve()
         }
@@ -380,7 +379,6 @@ export default function FullScreenDrawingImprovedAnimation() {
                 size="icon"
                 onClick={undo}
                 disabled={undoStack.length === 0}
-                
                 aria-label="Undo"
                 className="rounded-r-none border-r-0"
               >
