@@ -204,7 +204,7 @@ export default function FullScreenDrawingImprovedAnimation() {
         pathElement.style.strokeDashoffset = `${length}`
         pathElement.style.transition = 'none'
       })
-      void svgRef.current.offsetWidth // Force reflow
+      void svgRef.current.getBBox() // Force reflow
     }
   }
 
