@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Label } from "@/components/ui/label"
@@ -11,20 +11,6 @@ import FileSaver from 'file-saver'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import GIF from 'gif.js'
 import { Switch } from "@/components/ui/switch"
-
-import { globalCss } from '@stitches/react';
-
-const globalStyles = globalCss({
-  '.no-highlight': {
-    '-webkit-tap-highlight-color': 'transparent',
-    '-webkit-touch-callout': 'none',
-    '-webkit-user-select': 'none',
-    '-khtml-user-select': 'none',
-    '-moz-user-select': 'none',
-    '-ms-user-select': 'none',
-    'user-select': 'none',
-  }
-});
 
 // IMPORTANT: Download the GIF worker script from:
 // https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js
@@ -46,23 +32,7 @@ const MAX_DURATION = 30
 const DEFAULT_DURATION = 3
 const FPS = 60
 
-const STORAGE_KEY = 'drawing-app-data'
-
-const saveDrawingData = (paths: Path[], undoStack: Path[][], redoStack: Path[][]) => {
-  const data = JSON.stringify({ paths, undoStack, redoStack })
-  localStorage.setItem(STORAGE_KEY, data)
-}
-
-const loadDrawingData = (): { paths: Path[], undoStack: Path[][], redoStack: Path[][] } | null => {
-  const data = localStorage.getItem(STORAGE_KEY)
-  if (data) {
-    return JSON.parse(data)
-  }
-  return null
-}
-
 export default function FullScreenDrawingImprovedAnimation() {
-  globalStyles();
   const [isDrawing, setIsDrawing] = useState(false)
   const [isAnimating, setIsAnimating] = useState(false)
   const [duration, setDuration] = useState(DEFAULT_DURATION)
@@ -81,9 +51,8 @@ export default function FullScreenDrawingImprovedAnimation() {
   const [gifTransparency, setGifTransparency] = useState(false)
   const [svgFileName, setSvgFileName] = useState('drawing.svg')
   const [gifFileName, setGifFileName] = useState('animated-drawing.gif')
-  const [jitter, setJitter] = useState(0)
+  const [jitter, setJitter] = useState(0) // Update: Changed initial jitter value to 0
   const [simultaneousAnimation, setSimultaneousAnimation] = useState(false)
-  const [pixelRatio, setPixelRatio] = useState(1)
 
   useEffect(() => {
     const metaViewport = document.querySelector('meta[name=viewport]')
@@ -95,21 +64,15 @@ export default function FullScreenDrawingImprovedAnimation() {
       newMetaViewport.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, orientation=portrait'
       document.head.appendChild(newMetaViewport)
     }
-
-    // Removed Key event listener for panning
-
   }, [])
 
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
-        const { clientWidth, clientHeight } = containerRef.current
-        const ratio = window.devicePixelRatio || 1
         setDimensions({
-          width: clientWidth,
-          height: clientHeight - 80 // Subtracting toolbar height
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight - 80 // Subtracting toolbar height
         })
-        setPixelRatio(ratio)
       }
     }
 
@@ -117,20 +80,6 @@ export default function FullScreenDrawingImprovedAnimation() {
     window.addEventListener('resize', updateDimensions)
     return () => window.removeEventListener('resize', updateDimensions)
   }, [])
-
-  useLayoutEffect(() => {
-    const canvas = canvasRef.current
-    const ctx = canvas?.getContext('2d')
-    if (!canvas || !ctx) return
-
-    canvas.width = dimensions.width * pixelRatio
-    canvas.height = dimensions.height * pixelRatio
-    canvas.style.width = `${dimensions.width}px`
-    canvas.style.height = `${dimensions.height}px`
-
-    ctx.scale(pixelRatio, pixelRatio)
-    redrawCanvas()
-  }, [dimensions, pixelRatio])
 
   const animatePaths = useCallback(() => {
     if (!svgRef.current) return
@@ -211,32 +160,20 @@ export default function FullScreenDrawingImprovedAnimation() {
     }
   }, [isAnimating, paths, animatePaths])
 
-  useEffect(() => {
-    const savedData = loadDrawingData()
-    if (savedData) {
-      setPaths(savedData.paths)
-      setUndoStack(savedData.undoStack)
-      setRedoStack(savedData.redoStack)
-    }
-  }, [])
-
   const startDrawing = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
     if (!canvas) return
 
     setIsDrawing(true)
     const rect = canvas.getBoundingClientRect()
-    const x = (('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left) * pixelRatio
-    const y = (('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top) * pixelRatio
+    const x = ('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left
+    const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top
     const time = Date.now()
     setPrevPoint({ x, y })
     setPaths(prev => {
-      const newPaths = [...prev, { d: `M${x},${y}`, color: currentColor, size: size * pixelRatio, points: [{ x, y, time }] }]
-      const newUndoStack = [...undoStack, prev]
-      saveDrawingData(newPaths, newUndoStack, [])
-      setUndoStack(newUndoStack)
+      setUndoStack(undoStack => [...undoStack, prev])
       setRedoStack([])
-      return newPaths
+      return [...prev, { d: `M${x},${y}`, color: currentColor, size, points: [{ x, y, time }] }]
     })
   }
 
@@ -248,8 +185,8 @@ export default function FullScreenDrawingImprovedAnimation() {
     if (!canvas || !ctx || !prevPoint) return
 
     const rect = canvas.getBoundingClientRect()
-    const x = (('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left) * pixelRatio
-    const y = (('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top) * pixelRatio
+    const x = ('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left
+    const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top
 
     const time = Date.now()
     const newPoint = { x, y, time }
@@ -280,7 +217,6 @@ export default function FullScreenDrawingImprovedAnimation() {
       const path = new Path2D(currentPath.d)
       ctx.stroke(path)
 
-      saveDrawingData(newPaths, undoStack, redoStack)
       return newPaths
     })
 
@@ -292,7 +228,6 @@ export default function FullScreenDrawingImprovedAnimation() {
     setPrevPoint(null)
   }
 
-
   const clearCanvas = () => {
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
@@ -303,7 +238,6 @@ export default function FullScreenDrawingImprovedAnimation() {
     setUndoStack([])
     setRedoStack([])
     setIsAnimating(false)
-    localStorage.removeItem(STORAGE_KEY)
   }
 
   const toggleAnimation = () => {
@@ -328,46 +262,32 @@ export default function FullScreenDrawingImprovedAnimation() {
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx) return
 
-    // Clear the entire canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height)
-
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
 
-    ctx.save()
-    ctx.scale(pixelRatio, pixelRatio)
-    //Removed panOffset translation
-
     paths.forEach(path => {
       ctx.strokeStyle = path.color
-      ctx.lineWidth = path.size / pixelRatio
+      ctx.lineWidth = path.size
       ctx.beginPath()
       const pathObj = new Path2D(path.d)
       ctx.stroke(pathObj)
     })
-
-    ctx.restore()
   }
 
-  const undo = useCallback(() => {
+  const undo = () => {
     if (undoStack.length === 0) return
     const previousPaths = undoStack[undoStack.length - 1]
-    const newUndoStack = undoStack.slice(0, -1)
-    const newRedoStack = [...redoStack, paths]
-    saveDrawingData(previousPaths, newUndoStack, newRedoStack)
-    setUndoStack(newUndoStack)
-    setRedoStack(newRedoStack)
+    setUndoStack(undoStack.slice(0, -1))
+    setRedoStack([...redoStack, paths])
     setPaths(previousPaths)
-  }, [undoStack, redoStack, paths])
+  }
 
   const redo = () => {
     if (redoStack.length === 0) return
     const nextPaths = redoStack[redoStack.length - 1]
-    const newRedoStack = redoStack.slice(0, -1)
-    const newUndoStack = [...undoStack, paths]
-    saveDrawingData(nextPaths, newUndoStack, newRedoStack)
-    setRedoStack(newRedoStack)
-    setUndoStack(newUndoStack)
+    setRedoStack(redoStack.slice(0, -1))
+    setUndoStack([...undoStack, paths])
     setPaths(nextPaths)
   }
 
@@ -409,7 +329,6 @@ export default function FullScreenDrawingImprovedAnimation() {
       if (!tempCtx) return
 
       // Draw all paths to determine the bounding box
-      tempCtx.save()
       paths.forEach(path => {
         tempCtx.strokeStyle = path.color
         tempCtx.lineWidth = path.size
@@ -418,7 +337,6 @@ export default function FullScreenDrawingImprovedAnimation() {
         const pathData = new Path2D(path.d)
         tempCtx.stroke(pathData)
       })
-      tempCtx.restore()
 
       const { minX, minY, maxX, maxY } = getBoundingBox(tempCtx, dimensions.width, dimensions.height)
       const cropWidth = maxX - minX + 20  // Add some padding
@@ -448,7 +366,6 @@ export default function FullScreenDrawingImprovedAnimation() {
     if (!tempCtx) return
 
     // Draw all paths to determine the bounding box
-    tempCtx.save()
     paths.forEach(path => {
       tempCtx.strokeStyle = path.color
       tempCtx.lineWidth = path.size
@@ -457,7 +374,6 @@ export default function FullScreenDrawingImprovedAnimation() {
       const pathData = new Path2D(path.d)
       tempCtx.stroke(pathData)
     })
-    tempCtx.restore()
 
     const { minX, minY, maxX, maxY } = getBoundingBox(tempCtx, dimensions.width, dimensions.height)
     const cropWidth = maxX - minX + 20  // Add some padding
@@ -539,7 +455,7 @@ export default function FullScreenDrawingImprovedAnimation() {
               ctx.fillStyle = '#ffffff'
               ctx.fillRect(0, 0, cropWidth, cropHeight)
             }
-            ctx.drawImage(img, -minX + 10, -minY + 10) // Adjust for padding and pan offset
+            ctx.drawImage(img, -minX + 10, -minY + 10) // Adjust for padding
             gif.addFrame(canvas, { copy: true, delay: 1000 / FPS })
           }
           resolve()
@@ -555,13 +471,9 @@ export default function FullScreenDrawingImprovedAnimation() {
     gif.render()
   }
 
-  useEffect(() => {
-    redrawCanvas()
-  }, [paths, pixelRatio])
-
   return (
     <TooltipProvider>
-      <div ref={containerRef} className="fixed inset-0 bg-background flex flex-col select-none no-highlight">
+      <div ref={containerRef} className="fixed inset-0 bg-background flex flex-col select-none">
         <div className="relative flex-grow">
           <canvas
             ref={canvasRef}
@@ -580,7 +492,6 @@ export default function FullScreenDrawingImprovedAnimation() {
             ref={svgRef}
             width={dimensions.width}
             height={dimensions.height}
-            viewBox={`0 0 ${dimensions.width * pixelRatio} ${dimensions.height * pixelRatio}`}
             className="absolute top-0 left-0 pointer-events-none select-none"
           >
             {paths.map((path, index) => (
