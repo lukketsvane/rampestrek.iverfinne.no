@@ -28,7 +28,7 @@ const MIN_SIZE = 1
 const MAX_SIZE = 20
 const MIN_DURATION = 0.1
 const MAX_DURATION = 30
-const DEFAULT_DURATION = 5
+const DEFAULT_DURATION = 3 // Changed to 3 seconds
 const FPS = 30
 
 export default function FullScreenDrawingImprovedAnimation() {
@@ -47,7 +47,7 @@ export default function FullScreenDrawingImprovedAnimation() {
   const [prevPoint, setPrevPoint] = useState<{ x: number; y: number } | null>(null)
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
   const [isExporting, setIsExporting] = useState(false)
-  const [gifTransparency, setGifTransparency] = useState(true)
+  const [gifTransparency, setGifTransparency] = useState(false) // Changed to false by default
   const [svgFileName, setSvgFileName] = useState('drawing.svg')
   const [gifFileName, setGifFileName] = useState('animated-drawing.gif')
 
@@ -345,15 +345,34 @@ export default function FullScreenDrawingImprovedAnimation() {
 
     const totalFrames = Math.ceil(duration * FPS)
     const svgClone = svgRef.current.cloneNode(true) as SVGSVGElement
+    const pathElements = Array.from(svgClone.querySelectorAll('path'))
+
+    const totalLength = pathElements.reduce((sum, path) => sum + path.getTotalLength(), 0)
+    let accumulatedLength = 0
 
     for (let frame = 0; frame <= totalFrames; frame++) {
       const progress = frame / totalFrames
-      const pathElements = svgClone.querySelectorAll('path')
+      const targetLength = totalLength * progress
 
-      pathElements.forEach((pathElement) => {
+      pathElements.forEach((pathElement, index) => {
         const length = pathElement.getTotalLength()
-        pathElement.style.strokeDasharray = `${length} ${length}`
-        pathElement.style.strokeDashoffset = `${length * (1 - progress)}`
+        const startOffset = accumulatedLength / totalLength
+        const endOffset = (accumulatedLength + length) / totalLength
+
+        if (progress > startOffset) {
+          const pathProgress = Math.min((progress - startOffset) / (endOffset - startOffset), 1)
+          pathElement.style.strokeDasharray = `${length} ${length}`
+          pathElement.style.strokeDashoffset = `${length * (1 - pathProgress)}`
+        } else {
+          pathElement.style.strokeDasharray = `${length} ${length}`
+          pathElement.style.strokeDashoffset = `${length}`
+        }
+
+        if (index === pathElements.length - 1) {
+          accumulatedLength = 0 // Reset for the next frame
+        } else {
+          accumulatedLength += length
+        }
       })
 
       const svgData = new XMLSerializer().serializeToString(svgClone)
@@ -437,22 +456,22 @@ export default function FullScreenDrawingImprovedAnimation() {
             </Button>
             <div className="flex">
               <Button
-                variant="outline"
+                variant="ghost"
                 size="icon"
                 onClick={undo}
                 disabled={undoStack.length === 0}
                 aria-label="Undo"
-                className="rounded-r-none border-r-0"
+                className="hover:bg-transparent"
               >
                 <Undo className="h-4 w-4" />
               </Button>
               <Button
-                variant="outline"
+                variant="ghost"
                 size="icon"
                 onClick={redo}
                 disabled={redoStack.length === 0}
                 aria-label="Redo"
-                className="rounded-l-none"
+                className="hover:bg-transparent"
               >
                 <Redo className="h-4 w-4" />
               </Button>
@@ -526,7 +545,7 @@ export default function FullScreenDrawingImprovedAnimation() {
                   step={0.1}
                   value={duration}
                   onChange={handleDurationChange}
-                  className="w-20 pr-8"
+                  className="w-16 pr-6"
                 />
                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">s</span>
               </div>
@@ -545,27 +564,31 @@ export default function FullScreenDrawingImprovedAnimation() {
                   <div className="grid gap-4">
                     <div className="grid gap-2">
                       <Label htmlFor="svg-filename">SVG Filename</Label>
-                      <Input
-                        id="svg-filename"
-                        value={svgFileName}
-                        onChange={(e) => setSvgFileName(e.target.value)}
-                      />
-                      <Button onClick={downloadSVG} className="w-full justify-start">
-                        <Save className="mr-2 h-4 w-4" />
-                        Download SVG
-                      </Button>
+                      <div className="flex gap-2">
+                        <Input
+                          id="svg-filename"
+                          value={svgFileName}
+                          onChange={(e) => setSvgFileName(e.target.value)}
+                          className="flex-grow"
+                        />
+                        <Button onClick={downloadSVG} size="icon" aria-label="Download SVG">
+                          <Save className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="gif-filename">GIF Filename</Label>
-                      <Input
-                        id="gif-filename"
-                        value={gifFileName}
-                        onChange={(e) => setGifFileName(e.target.value)}
-                      />
-                      <Button onClick={downloadGIF} className="w-full justify-start">
-                        <ImageIcon className="mr-2 h-4 w-4" />
-                        Download GIF
-                      </Button>
+                      <div className="flex gap-2">
+                        <Input
+                          id="gif-filename"
+                          value={gifFileName}
+                          onChange={(e) => setGifFileName(e.target.value)}
+                          className="flex-grow"
+                        />
+                        <Button onClick={downloadGIF} size="icon" aria-label="Download GIF">
+                          <ImageIcon className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                     <div className="flex items-center space-x-2">
                       <Switch
