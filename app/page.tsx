@@ -12,6 +12,20 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import GIF from 'gif.js'
 import { Switch } from "@/components/ui/switch"
 
+import { globalCss } from '@stitches/react';
+
+const globalStyles = globalCss({
+  '.no-highlight': {
+    '-webkit-tap-highlight-color': 'transparent',
+    '-webkit-touch-callout': 'none',
+    '-webkit-user-select': 'none',
+    '-khtml-user-select': 'none',
+    '-moz-user-select': 'none',
+    '-ms-user-select': 'none',
+    'user-select': 'none',
+  }
+});
+
 // IMPORTANT: Download the GIF worker script from:
 // https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js
 // and place it in your public directory.
@@ -33,6 +47,7 @@ const DEFAULT_DURATION = 3
 const FPS = 60
 
 export default function FullScreenDrawingImprovedAnimation() {
+  globalStyles();
   const [isDrawing, setIsDrawing] = useState(false)
   const [isAnimating, setIsAnimating] = useState(false)
   const [isPanning, setIsPanning] = useState(false)
@@ -73,6 +88,10 @@ export default function FullScreenDrawingImprovedAnimation() {
         e.preventDefault()
         setPanMode(true)
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault()
+        undo()
+      }
     }
 
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -88,7 +107,7 @@ export default function FullScreenDrawingImprovedAnimation() {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [])
+  }, )
 
   useEffect(() => {
     const updateDimensions = () => {
@@ -287,6 +306,7 @@ export default function FullScreenDrawingImprovedAnimation() {
   const endPanning = () => {
     setIsPanning(false)
     setPrevPoint(null)
+    redrawCanvas()
   }
 
   const clearCanvas = () => {
@@ -342,14 +362,14 @@ export default function FullScreenDrawingImprovedAnimation() {
     ctx.restore()
   }
 
-  const undo = () => {
+  const undo = useCallback(() => {
     if (undoStack.length === 0) return
     const previousPaths = undoStack[undoStack.length - 1]
     
     setUndoStack(undoStack.slice(0, -1))
     setRedoStack([...redoStack, paths])
     setPaths(previousPaths)
-  }
+  }, [undoStack, redoStack, paths])
 
   const redo = () => {
     if (redoStack.length === 0) return
@@ -547,7 +567,7 @@ export default function FullScreenDrawingImprovedAnimation() {
 
   return (
     <TooltipProvider>
-      <div ref={containerRef} className="fixed inset-0 bg-background flex flex-col select-none">
+      <div ref={containerRef} className="fixed inset-0 bg-background flex flex-col select-none no-highlight">
         <div className="relative flex-grow">
           <canvas
             ref={canvasRef}
@@ -694,15 +714,6 @@ export default function FullScreenDrawingImprovedAnimation() {
                 </div>
               </PopoverContent>
             </Popover>
-            <Button
-              variant={panMode ? "secondary" : "outline"}
-              size="icon"
-              onClick={() => setPanMode(!panMode)}
-              aria-label={panMode ? "Disable pan mode" : "Enable pan mode"}
-              className="h-8 w-8"
-            >
-              <Hand className="h-4 w-4" />
-            </Button>
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center">
@@ -796,4 +807,4 @@ export default function FullScreenDrawingImprovedAnimation() {
       </div>
     </TooltipProvider>
   )
-}            
+}
