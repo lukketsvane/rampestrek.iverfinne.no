@@ -10,6 +10,7 @@ import { Pencil, Play, Pause, RotateCcw, Undo, Redo, Clock, Save, Image as Image
 import FileSaver from 'file-saver'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import GIF from 'gif.js'
+import { Switch } from "@/components/ui/switch"
 
 // IMPORTANT: Download the GIF worker script from:
 // https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js
@@ -46,6 +47,7 @@ export default function FullScreenDrawingImprovedAnimation() {
   const [prevPoint, setPrevPoint] = useState<{ x: number; y: number } | null>(null)
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
   const [isExporting, setIsExporting] = useState(false)
+  const [gifTransparency, setGifTransparency] = useState(true)
 
   useEffect(() => {
     const updateDimensions = () => {
@@ -204,7 +206,7 @@ export default function FullScreenDrawingImprovedAnimation() {
         pathElement.style.strokeDashoffset = `${length}`
         pathElement.style.transition = 'none'
       })
-      void svgRef.current.getBBox() // Force reflow
+      void svgRef.current.getBBox()
     }
   }
 
@@ -248,23 +250,59 @@ export default function FullScreenDrawingImprovedAnimation() {
     }
   }
 
+  const getBoundingBox = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+    const imageData = ctx.getImageData(0, 0, width, height)
+    let minX = width, minY = height, maxX = 0, maxY = 0
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const alpha = imageData.data[(y * width + x) * 4 + 3]
+        if (alpha !== 0) {
+          minX = Math.min(minX, x)
+          minY = Math.min(minY, y)
+          maxX = Math.max(maxX, x)
+          maxY = Math.max(maxY, y)
+        }
+      }
+    }
+
+    return { minX, minY, maxX, maxY }
+  }
+
   const downloadSVG = () => {
     if (svgRef.current) {
-      // Clone the SVG to modify it without affecting the displayed version
       const svgClone = svgRef.current.cloneNode(true) as SVGSVGElement
 
-      // Set the width and height attributes
-      svgClone.setAttribute('width', dimensions.width.toString())
-      svgClone.setAttribute('height', dimensions.height.toString())
+      // Create a temporary canvas to determine the bounding box
+      const tempCanvas = document.createElement('canvas')
+      tempCanvas.width = dimensions.width
+      tempCanvas.height = dimensions.height
+      const tempCtx = tempCanvas.getContext('2d')
+      if (!tempCtx) return
 
-      // Create a blob from the SVG content
+      // Draw all paths to determine the bounding box
+      paths.forEach(path => {
+        tempCtx.strokeStyle = path.color
+        tempCtx.lineWidth = path.size
+        tempCtx.lineCap = 'round'
+        tempCtx.lineJoin = 'round'
+        const pathData = new Path2D(path.d)
+        tempCtx.stroke(pathData)
+      })
+
+      const { minX, minY, maxX, maxY } = getBoundingBox(tempCtx, dimensions.width, dimensions.height)
+      const cropWidth = maxX - minX + 20  // Add some padding
+      const cropHeight = maxY - minY + 20 // Add some padding
+
+      // Update SVG viewBox and size
+      svgClone.setAttribute('viewBox', `${minX - 10} ${minY - 10} ${cropWidth} ${cropHeight}`)
+      svgClone.setAttribute('width', cropWidth.toString())
+      svgClone.setAttribute('height', cropHeight.toString())
+
       const svgData = new XMLSerializer().serializeToString(svgClone)
       const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
 
-      // Prompt for file name
       const fileName = prompt('Enter file name', 'drawing.svg') || 'drawing.svg'
-
-      // Save the file
       FileSaver.saveAs(svgBlob, fileName)
     }
   }
@@ -274,18 +312,37 @@ export default function FullScreenDrawingImprovedAnimation() {
 
     setIsExporting(true)
 
+    const tempCanvas = document.createElement('canvas')
+    tempCanvas.width = dimensions.width
+    tempCanvas.height = dimensions.height
+    const tempCtx = tempCanvas.getContext('2d')
+    if (!tempCtx) return
+
+    // Draw all paths to determine the bounding box
+    paths.forEach(path => {
+      tempCtx.strokeStyle = path.color
+      tempCtx.lineWidth = path.size
+      tempCtx.lineCap = 'round'
+      tempCtx.lineJoin = 'round'
+      const pathData = new Path2D(path.d)
+      tempCtx.stroke(pathData)
+    })
+
+    const { minX, minY, maxX, maxY } = getBoundingBox(tempCtx, dimensions.width, dimensions.height)
+    const cropWidth = maxX - minX + 20  // Add some padding
+    const cropHeight = maxY - minY + 20 // Add some padding
+
     const gif = new GIF({
       workers: 2,
       quality: 10,
-      width: dimensions.width,
-      height: dimensions.height,
+      width: cropWidth,
+      height: cropHeight,
       workerScript: '/gif.worker.js',
-      transparent: 'rgba(0,0,0,0)'
+      transparent: gifTransparency ? 'rgba(0,0,0,0)' : null
     })
 
     const totalFrames = Math.ceil(duration * FPS)
     const svgClone = svgRef.current.cloneNode(true) as SVGSVGElement
-    // svgClone.style.backgroundColor = 'white' // Removed line
 
     for (let frame = 0; frame <= totalFrames; frame++) {
       const progress = frame / totalFrames
@@ -304,13 +361,12 @@ export default function FullScreenDrawingImprovedAnimation() {
       await new Promise<void>((resolve) => {
         img.onload = () => {
           const canvas = document.createElement('canvas')
-          canvas.width = dimensions.width
-          canvas.height = dimensions.height
+          canvas.width = cropWidth
+          canvas.height = cropHeight
           const ctx = canvas.getContext('2d')
           if (ctx) {
-            // Removed white background fill
-            ctx.drawImage(img, 0, 0)
-            gif.addFrame(canvas, { copy: true, delay: 1000 / FPS, transparent: 0 })
+            ctx.drawImage(img, -minX + 10, -minY + 10) // Adjust for padding
+            gif.addFrame(canvas, { copy: true, delay: 1000 / FPS })
           }
           resolve()
         }
@@ -460,33 +516,37 @@ export default function FullScreenDrawingImprovedAnimation() {
                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">s</span>
               </div>
               <Clock className="h-4 w-4 text-muted-foreground" />
-              <Tooltip>
-                <TooltipTrigger asChild>
+              <Popover>
+                <PopoverTrigger asChild>
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={downloadSVG}
-                    aria-label="Download SVG"
+                    aria-label="Download options"
                   >
                     <Save className="h-4 w-4" />
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent>Download SVG</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={downloadGIF}
-                    disabled={isExporting || paths.length === 0}
-                    aria-label="Download GIF"
-                  >
-                    <ImageIcon className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Download GIF</TooltipContent>
-              </Tooltip>
+                </PopoverTrigger>
+                <PopoverContent className="w-56">
+                  <div className="grid gap-4">
+                    <Button onClick={downloadSVG} className="w-full justify-start">
+                      <Save className="mr-2 h-4 w-4" />
+                      Download SVG
+                    </Button>
+                    <Button onClick={downloadGIF} className="w-full justify-start">
+                      <ImageIcon className="mr-2 h-4 w-4" />
+                      Download GIF
+                    </Button>
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        id="gif-transparency"
+                        checked={gifTransparency}
+                        onCheckedChange={setGifTransparency}
+                      />
+                      <Label htmlFor="gif-transparency">GIF Transparency</Label>
+                    </div>
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
             <Button
               variant="outline"
