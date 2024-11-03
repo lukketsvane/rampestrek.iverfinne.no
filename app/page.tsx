@@ -11,6 +11,7 @@ import FileSaver from 'file-saver'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import GIF from 'gif.js'
 import { Switch } from "@/components/ui/switch"
+import Image from 'next/image'
 
 // IMPORTANT: Download the GIF worker script from:
 // https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js
@@ -20,6 +21,7 @@ interface Path {
   d: string
   color: string
   size: number
+  points: { x: number; y: number; time: number }[]
 }
 
 const DEFAULT_COLORS = ['#000000', '#1E00D2', '#0ACF83', '#A259FF', '#F24E1E', '#FF7262', '#1ABCFE']
@@ -50,6 +52,10 @@ export default function FullScreenDrawingImprovedAnimation() {
   const [gifTransparency, setGifTransparency] = useState(false) // Changed to false by default
   const [svgFileName, setSvgFileName] = useState('drawing.svg')
   const [gifFileName, setGifFileName] = useState('animated-drawing.gif')
+  const [jitter, setJitter] = useState(0)
+  const [simultaneousAnimation, setSimultaneousAnimation] = useState(false)
+  //Removed smoothing
+  //const [smoothing, setSmoothing] = useState(0.5)
 
   useEffect(() => {
     const updateDimensions = () => {
@@ -81,7 +87,6 @@ export default function FullScreenDrawingImprovedAnimation() {
     if (!svgRef.current) return
 
     const pathElements = svgRef.current.querySelectorAll('path')
-    const totalLength = Array.from(pathElements).reduce((sum, path) => sum + path.getTotalLength(), 0)
     const animationDuration = duration * 1000 // Convert duration to milliseconds
     let startTime: number | null = null
 
@@ -89,21 +94,36 @@ export default function FullScreenDrawingImprovedAnimation() {
       if (!startTime) startTime = timestamp
       const elapsedTime = timestamp - startTime
 
-      let accumulatedLength = 0
-      pathElements.forEach((pathElement) => {
-        const length = pathElement.getTotalLength()
-        const startOffset = (accumulatedLength / totalLength) * animationDuration
-        const endOffset = ((accumulatedLength + length) / totalLength) * animationDuration
-
-        if (elapsedTime > startOffset) {
-          const progress = Math.min((elapsedTime - startOffset) / (endOffset - startOffset), 1)
+      if (simultaneousAnimation) {
+        // Simultaneous animation (all paths at once)
+        pathElements.forEach((pathElement) => {
+          const length = pathElement.getTotalLength()
+          const progress = Math.min(elapsedTime / animationDuration, 1)
+          pathElement.style.strokeDasharray = `${length} ${length}`
           pathElement.style.strokeDashoffset = `${length * (1 - progress)}`
-        } else {
-          pathElement.style.strokeDashoffset = `${length}`
-        }
+        })
+      } else {
+        // Sequential animation (one path at a time)
+        const totalLength = Array.from(pathElements).reduce((sum, path) => sum + path.getTotalLength(), 0)
+        let accumulatedLength = 0
 
-        accumulatedLength += length
-      })
+        pathElements.forEach((pathElement) => {
+          const length = pathElement.getTotalLength()
+          const startOffset = (accumulatedLength / totalLength) * animationDuration
+          const endOffset = ((accumulatedLength + length) / totalLength) * animationDuration
+
+          if (elapsedTime > startOffset) {
+            const progress = Math.min((elapsedTime - startOffset) / (endOffset - startOffset), 1)
+            pathElement.style.strokeDasharray = `${length} ${length}`
+            pathElement.style.strokeDashoffset = `${length * (1 - progress)}`
+          } else {
+            pathElement.style.strokeDasharray = `${length} ${length}`
+            pathElement.style.strokeDashoffset = `${length}`
+          }
+
+          accumulatedLength += length
+        })
+      }
 
       if (elapsedTime < animationDuration) {
         animationRef.current = requestAnimationFrame(animate)
@@ -113,7 +133,7 @@ export default function FullScreenDrawingImprovedAnimation() {
     }
 
     animationRef.current = requestAnimationFrame(animate)
-  }, [duration])
+  }, [duration, simultaneousAnimation])
 
   useEffect(() => {
     if (isAnimating && paths.length > 0) {
@@ -140,11 +160,12 @@ export default function FullScreenDrawingImprovedAnimation() {
     const rect = canvas.getBoundingClientRect()
     const x = ('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left
     const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top
+    const time = Date.now()
     setPrevPoint({ x, y })
     setPaths(prev => {
       setUndoStack(undoStack => [...undoStack, prev])
       setRedoStack([])
-      return [...prev, { d: `M${x},${y}`, color: currentColor, size }]
+      return [...prev, { d: `M${x},${y}`, color: currentColor, size, points: [{ x, y, time }] }]
     })
   }
 
@@ -155,23 +176,41 @@ export default function FullScreenDrawingImprovedAnimation() {
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx || !prevPoint) return
 
-    ctx.strokeStyle = currentColor
-    ctx.lineWidth = size
-    ctx.lineCap = 'round'
-    ctx.lineJoin = 'round'
-
     const rect = canvas.getBoundingClientRect()
     const x = ('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left
     const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top
 
-    ctx.beginPath()
-    ctx.moveTo(prevPoint.x, prevPoint.y)
-    ctx.lineTo(x, y)
-    ctx.stroke()
+    const time = Date.now()
+    const newPoint = { x, y, time }
 
     setPaths(prev => {
       const newPaths = [...prev]
-      newPaths[newPaths.length - 1].d += ` L${x},${y}`
+      const currentPath = newPaths[newPaths.length - 1]
+      currentPath.points.push(newPoint)
+
+      // Redraw the entire path with shaking effect
+      ctx.strokeStyle = currentPath.color
+      ctx.lineWidth = currentPath.size
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+
+      ctx.beginPath()
+      currentPath.points.forEach((point, index) => {
+        const shake = Math.sin(point.time * 0.1) * jitter
+        const shakex = point.x + shake
+        const shakey = point.y + shake
+
+        if (index === 0) {
+          ctx.moveTo(shakex, shakey)
+        } else {
+          ctx.lineTo(shakex, shakey)
+        }
+      })
+      ctx.stroke()
+
+      // Update the SVG path
+      currentPath.d = `M ${currentPath.points.map(p => `${p.x},${p.y}`).join(' L ')}`
+
       return newPaths
     })
 
@@ -224,8 +263,19 @@ export default function FullScreenDrawingImprovedAnimation() {
     paths.forEach(path => {
       ctx.strokeStyle = path.color
       ctx.lineWidth = path.size
-      const pathData = new Path2D(path.d)
-      ctx.stroke(pathData)
+      ctx.beginPath()
+      path.points.forEach((point, index) => {
+        const shake = Math.sin(point.time * 0.1) * jitter
+        const shakex = point.x + shake
+        const shakey = point.y + shake
+
+        if (index === 0) {
+          ctx.moveTo(shakex, shakey)
+        } else {
+          ctx.lineTo(shakex, shakey)
+        }
+      })
+      ctx.stroke()
     })
   }
 
@@ -352,28 +402,35 @@ export default function FullScreenDrawingImprovedAnimation() {
 
     for (let frame = 0; frame <= totalFrames; frame++) {
       const progress = frame / totalFrames
-      const targetLength = totalLength * progress
 
-      pathElements.forEach((pathElement, index) => {
-        const length = pathElement.getTotalLength()
-        const startOffset = accumulatedLength / totalLength
-        const endOffset = (accumulatedLength + length) / totalLength
-
-        if (progress > startOffset) {
-          const pathProgress = Math.min((progress - startOffset) / (endOffset - startOffset), 1)
+      if (simultaneousAnimation) {
+        // Simultaneous animation (all paths at once)
+        pathElements.forEach((pathElement) => {
+          const length = pathElement.getTotalLength()
           pathElement.style.strokeDasharray = `${length} ${length}`
-          pathElement.style.strokeDashoffset = `${length * (1 - pathProgress)}`
-        } else {
-          pathElement.style.strokeDasharray = `${length} ${length}`
-          pathElement.style.strokeDashoffset = `${length}`
-        }
+          pathElement.style.strokeDashoffset = `${length * (1 - progress)}`
+        })
+      } else {
+        // Sequential animation (one path at a time)
+        let accumulatedLength = 0
 
-        if (index === pathElements.length - 1) {
-          accumulatedLength = 0 // Reset for the next frame
-        } else {
+        pathElements.forEach((pathElement) => {
+          const length = pathElement.getTotalLength()
+          const startOffset = accumulatedLength / totalLength
+          const endOffset = (accumulatedLength + length) / totalLength
+
+          if (progress > startOffset) {
+            const pathProgress = Math.min((progress - startOffset) / (endOffset - startOffset), 1)
+            pathElement.style.strokeDasharray = `${length} ${length}`
+            pathElement.style.strokeDashoffset = `${length * (1 - pathProgress)}`
+          } else {
+            pathElement.style.strokeDasharray = `${length} ${length}`
+            pathElement.style.strokeDashoffset = `${length}`
+          }
+
           accumulatedLength += length
-        }
-      })
+        })
+      }
 
       const svgData = new XMLSerializer().serializeToString(svgClone)
       const img = new Image()
@@ -499,12 +556,19 @@ export default function FullScreenDrawingImprovedAnimation() {
                       aria-label={`Select ${color} color`}
                     />
                   ))}
-                  <div className="flex items-center">
+                  <div className="flex items-center justify-center w-8 h-8 rounded-full overflow-hidden border-2 border-primary relative">
+                    <Image
+                      src="/images/color_picker.png"
+                      alt="Custom color picker"
+                      width={32}
+                      height={32}
+                      className="absolute inset-0"
+                    />
                     <input
                       type="color"
                       value={currentColor}
                       onChange={(e) => setCurrentColor(e.target.value)}
-                      className="w-8 h-8 rounded-full cursor-pointer"
+                      className="opacity-0 w-full h-full cursor-pointer absolute inset-0"
                       aria-label="Select custom color"
                     />
                   </div>
@@ -518,17 +582,33 @@ export default function FullScreenDrawingImprovedAnimation() {
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-64">
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="size-slider" className="w-12">Size:</Label>
-                  <Slider
-                    id="size-slider"
-                    min={MIN_SIZE}
-                    max={MAX_SIZE}
-                    step={1}
-                    value={[size]}
-                    onValueChange={(value) => setSize(value[0])}
-                    className="w-full"
-                  />
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="size-slider">Size:</Label>
+                    <Slider
+                      id="size-slider"
+                      min={MIN_SIZE}
+                      max={MAX_SIZE}
+                      step={1}
+                      value={[size]}
+                      onValueChange={(value) => setSize(value[0])}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="jitter-slider">Jitter:</Label>
+                    <Slider
+                      id="jitter-slider"
+                      min={0}
+                      max={5}
+                      step={0.1}
+                      value={[jitter]}
+                      onValueChange={(value) => {
+                        setJitter(value[0])
+                        redrawCanvas()
+                      }}
+                    />
+                  </div>
+                  {/* Removed smoothing slider */}
                 </div>
               </PopoverContent>
             </Popover>
@@ -597,6 +677,14 @@ export default function FullScreenDrawingImprovedAnimation() {
                         onCheckedChange={setGifTransparency}
                       />
                       <Label htmlFor="gif-transparency">GIF Transparency</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        id="animation-mode"
+                        checked={simultaneousAnimation}
+                        onCheckedChange={setSimultaneousAnimation}
+                      />
+                      <Label htmlFor="animation-mode">Animate All Paths Simultaneously</Label>
                     </div>
                   </div>
                 </PopoverContent>
