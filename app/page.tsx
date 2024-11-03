@@ -57,6 +57,18 @@ export default function FullScreenDrawingImprovedAnimation() {
   //const [smoothing, setSmoothing] = useState(0.5)
 
   useEffect(() => {
+    const metaViewport = document.querySelector('meta[name=viewport]')
+    if (metaViewport) {
+      metaViewport.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, orientation=portrait')
+    } else {
+      const newMetaViewport = document.createElement('meta')
+      newMetaViewport.name = 'viewport'
+      newMetaViewport.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, orientation=portrait'
+      document.head.appendChild(newMetaViewport)
+    }
+  }, [])
+
+  useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
         setDimensions({
@@ -443,13 +455,13 @@ export default function FullScreenDrawingImprovedAnimation() {
 
   return (
     <TooltipProvider>
-      <div ref={containerRef} className="fixed inset-0 bg-background flex flex-col">
+      <div ref={containerRef} className="fixed inset-0 bg-background flex flex-col select-none">
         <div className="relative flex-grow">
           <canvas
             ref={canvasRef}
             width={dimensions.width}
             height={dimensions.height}
-            className={`touch-none ${isAnimating ? 'hidden' : 'block'}`}
+            className={`touch-none select-none ${isAnimating ? 'hidden' : 'block'}`}
             onMouseDown={startDrawing}
             onMouseMove={draw}
             onMouseUp={endDrawing}
@@ -462,7 +474,7 @@ export default function FullScreenDrawingImprovedAnimation() {
             ref={svgRef}
             width={dimensions.width}
             height={dimensions.height}
-            className="absolute top-0 left-0 pointer-events-none"
+            className="absolute top-0 left-0 pointer-events-none select-none"
           >
             {paths.map((path, index) => (
               <path
