@@ -1,12 +1,12 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Pencil, Play, Pause, RotateCcw, Undo, Redo, Save, Image as ImageIcon, Hand } from 'lucide-react'
+import { Pencil, Play, Pause, RotateCcw, Undo, Redo, Save, Image as ImageIcon } from 'lucide-react'
 import FileSaver from 'file-saver'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import GIF from 'gif.js'
@@ -46,13 +46,25 @@ const MAX_DURATION = 30
 const DEFAULT_DURATION = 3
 const FPS = 60
 
+const STORAGE_KEY = 'drawing-app-data'
+
+const saveDrawingData = (paths: Path[], undoStack: Path[][], redoStack: Path[][]) => {
+  const data = JSON.stringify({ paths, undoStack, redoStack })
+  localStorage.setItem(STORAGE_KEY, data)
+}
+
+const loadDrawingData = (): { paths: Path[], undoStack: Path[][], redoStack: Path[][] } | null => {
+  const data = localStorage.getItem(STORAGE_KEY)
+  if (data) {
+    return JSON.parse(data)
+  }
+  return null
+}
+
 export default function FullScreenDrawingImprovedAnimation() {
   globalStyles();
   const [isDrawing, setIsDrawing] = useState(false)
   const [isAnimating, setIsAnimating] = useState(false)
-  const [isPanning, setIsPanning] = useState(false)
-  const [panMode, setPanMode] = useState(false)
-  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
   const [duration, setDuration] = useState(DEFAULT_DURATION)
   const [size, setSize] = useState(DEFAULT_SIZE)
   const [paths, setPaths] = useState<Path[]>([])
@@ -71,6 +83,7 @@ export default function FullScreenDrawingImprovedAnimation() {
   const [gifFileName, setGifFileName] = useState('animated-drawing.gif')
   const [jitter, setJitter] = useState(0)
   const [simultaneousAnimation, setSimultaneousAnimation] = useState(false)
+  const [pixelRatio, setPixelRatio] = useState(1)
 
   useEffect(() => {
     const metaViewport = document.querySelector('meta[name=viewport]')
@@ -83,39 +96,20 @@ export default function FullScreenDrawingImprovedAnimation() {
       document.head.appendChild(newMetaViewport)
     }
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        e.preventDefault()
-        setPanMode(true)
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
-        e.preventDefault()
-        undo()
-      }
-    }
+    // Removed Key event listener for panning
 
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        setPanMode(false)
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
-    }
-  }, )
+  }, [])
 
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
+        const { clientWidth, clientHeight } = containerRef.current
+        const ratio = window.devicePixelRatio || 1
         setDimensions({
-          width: containerRef.current.clientWidth,
-          height: containerRef.current.clientHeight - 80 // Subtracting toolbar height
+          width: clientWidth,
+          height: clientHeight - 80 // Subtracting toolbar height
         })
+        setPixelRatio(ratio)
       }
     }
 
@@ -123,6 +117,20 @@ export default function FullScreenDrawingImprovedAnimation() {
     window.addEventListener('resize', updateDimensions)
     return () => window.removeEventListener('resize', updateDimensions)
   }, [])
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return
+
+    canvas.width = dimensions.width * pixelRatio
+    canvas.height = dimensions.height * pixelRatio
+    canvas.style.width = `${dimensions.width}px`
+    canvas.style.height = `${dimensions.height}px`
+
+    ctx.scale(pixelRatio, pixelRatio)
+    redrawCanvas()
+  }, [dimensions, pixelRatio])
 
   const animatePaths = useCallback(() => {
     if (!svgRef.current) return
@@ -203,34 +211,36 @@ export default function FullScreenDrawingImprovedAnimation() {
     }
   }, [isAnimating, paths, animatePaths])
 
-  const startDrawing = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (panMode) {
-      startPanning(event)
-      return
+  useEffect(() => {
+    const savedData = loadDrawingData()
+    if (savedData) {
+      setPaths(savedData.paths)
+      setUndoStack(savedData.undoStack)
+      setRedoStack(savedData.redoStack)
     }
+  }, [])
 
+  const startDrawing = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
     if (!canvas) return
 
     setIsDrawing(true)
     const rect = canvas.getBoundingClientRect()
-    const x = ('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left - panOffset.x
-    const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top - panOffset.y
+    const x = (('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left) * pixelRatio
+    const y = (('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top) * pixelRatio
     const time = Date.now()
     setPrevPoint({ x, y })
     setPaths(prev => {
-      setUndoStack(undoStack => [...undoStack, prev])
+      const newPaths = [...prev, { d: `M${x},${y}`, color: currentColor, size: size * pixelRatio, points: [{ x, y, time }] }]
+      const newUndoStack = [...undoStack, prev]
+      saveDrawingData(newPaths, newUndoStack, [])
+      setUndoStack(newUndoStack)
       setRedoStack([])
-      return [...prev, { d: `M${x},${y}`, color: currentColor, size, points: [{ x, y, time }] }]
+      return newPaths
     })
   }
 
   const draw = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (panMode) {
-      pan(event)
-      return
-    }
-
     if (!isDrawing) return
 
     const canvas = canvasRef.current
@@ -238,8 +248,8 @@ export default function FullScreenDrawingImprovedAnimation() {
     if (!canvas || !ctx || !prevPoint) return
 
     const rect = canvas.getBoundingClientRect()
-    const x = ('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left - panOffset.x
-    const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top - panOffset.y
+    const x = (('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left) * pixelRatio
+    const y = (('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top) * pixelRatio
 
     const time = Date.now()
     const newPoint = { x, y, time }
@@ -270,6 +280,7 @@ export default function FullScreenDrawingImprovedAnimation() {
       const path = new Path2D(currentPath.d)
       ctx.stroke(path)
 
+      saveDrawingData(newPaths, undoStack, redoStack)
       return newPaths
     })
 
@@ -281,33 +292,6 @@ export default function FullScreenDrawingImprovedAnimation() {
     setPrevPoint(null)
   }
 
-  const startPanning = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    setIsPanning(true)
-    const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX
-    const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY
-    setPrevPoint({ x: clientX, y: clientY })
-  }
-
-  const pan = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!isPanning || !prevPoint) return
-
-    const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX
-    const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY
-
-    const dx = clientX - prevPoint.x
-    const dy = clientY - prevPoint.y
-
-    setPanOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }))
-    setPrevPoint({ x: clientX, y: clientY })
-
-    redrawCanvas()
-  }
-
-  const endPanning = () => {
-    setIsPanning(false)
-    setPrevPoint(null)
-    redrawCanvas()
-  }
 
   const clearCanvas = () => {
     const canvas = canvasRef.current
@@ -319,7 +303,7 @@ export default function FullScreenDrawingImprovedAnimation() {
     setUndoStack([])
     setRedoStack([])
     setIsAnimating(false)
-    setPanOffset({ x: 0, y: 0 })
+    localStorage.removeItem(STORAGE_KEY)
   }
 
   const toggleAnimation = () => {
@@ -344,16 +328,19 @@ export default function FullScreenDrawingImprovedAnimation() {
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx) return
 
+    // Clear the entire canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height)
+
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
 
     ctx.save()
-    ctx.translate(panOffset.x, panOffset.y)
+    ctx.scale(pixelRatio, pixelRatio)
+    //Removed panOffset translation
 
     paths.forEach(path => {
       ctx.strokeStyle = path.color
-      ctx.lineWidth = path.size
+      ctx.lineWidth = path.size / pixelRatio
       ctx.beginPath()
       const pathObj = new Path2D(path.d)
       ctx.stroke(pathObj)
@@ -365,17 +352,22 @@ export default function FullScreenDrawingImprovedAnimation() {
   const undo = useCallback(() => {
     if (undoStack.length === 0) return
     const previousPaths = undoStack[undoStack.length - 1]
-    
-    setUndoStack(undoStack.slice(0, -1))
-    setRedoStack([...redoStack, paths])
+    const newUndoStack = undoStack.slice(0, -1)
+    const newRedoStack = [...redoStack, paths]
+    saveDrawingData(previousPaths, newUndoStack, newRedoStack)
+    setUndoStack(newUndoStack)
+    setRedoStack(newRedoStack)
     setPaths(previousPaths)
   }, [undoStack, redoStack, paths])
 
   const redo = () => {
     if (redoStack.length === 0) return
     const nextPaths = redoStack[redoStack.length - 1]
-    setRedoStack(redoStack.slice(0, -1))
-    setUndoStack([...undoStack, paths])
+    const newRedoStack = redoStack.slice(0, -1)
+    const newUndoStack = [...undoStack, paths]
+    saveDrawingData(nextPaths, newUndoStack, newRedoStack)
+    setRedoStack(newRedoStack)
+    setUndoStack(newUndoStack)
     setPaths(nextPaths)
   }
 
@@ -418,7 +410,6 @@ export default function FullScreenDrawingImprovedAnimation() {
 
       // Draw all paths to determine the bounding box
       tempCtx.save()
-      tempCtx.translate(panOffset.x, panOffset.y)
       paths.forEach(path => {
         tempCtx.strokeStyle = path.color
         tempCtx.lineWidth = path.size
@@ -434,7 +425,7 @@ export default function FullScreenDrawingImprovedAnimation() {
       const cropHeight = maxY - minY + 20 // Add some padding
 
       // Update SVG viewBox and size
-      svgClone.setAttribute('viewBox', `${minX - 10 - panOffset.x} ${minY - 10 - panOffset.y} ${cropWidth} ${cropHeight}`)
+      svgClone.setAttribute('viewBox', `${minX - 10} ${minY - 10} ${cropWidth} ${cropHeight}`)
       svgClone.setAttribute('width', cropWidth.toString())
       svgClone.setAttribute('height', cropHeight.toString())
 
@@ -458,7 +449,6 @@ export default function FullScreenDrawingImprovedAnimation() {
 
     // Draw all paths to determine the bounding box
     tempCtx.save()
-    tempCtx.translate(panOffset.x, panOffset.y)
     paths.forEach(path => {
       tempCtx.strokeStyle = path.color
       tempCtx.lineWidth = path.size
@@ -549,7 +539,7 @@ export default function FullScreenDrawingImprovedAnimation() {
               ctx.fillStyle = '#ffffff'
               ctx.fillRect(0, 0, cropWidth, cropHeight)
             }
-            ctx.drawImage(img, -minX + 10 - panOffset.x, -minY + 10 - panOffset.y) // Adjust for padding and pan offset
+            ctx.drawImage(img, -minX + 10, -minY + 10) // Adjust for padding and pan offset
             gif.addFrame(canvas, { copy: true, delay: 1000 / FPS })
           }
           resolve()
@@ -565,6 +555,10 @@ export default function FullScreenDrawingImprovedAnimation() {
     gif.render()
   }
 
+  useEffect(() => {
+    redrawCanvas()
+  }, [paths, pixelRatio])
+
   return (
     <TooltipProvider>
       <div ref={containerRef} className="fixed inset-0 bg-background flex flex-col select-none no-highlight">
@@ -574,20 +568,20 @@ export default function FullScreenDrawingImprovedAnimation() {
             width={dimensions.width}
             height={dimensions.height}
             className={`touch-none select-none ${isAnimating ? 'hidden' : 'block'}`}
-            onMouseDown={panMode ? startPanning : startDrawing}
-            onMouseMove={panMode ? pan : draw}
-            onMouseUp={panMode ? endPanning : endDrawing}
-            onMouseLeave={panMode ? endPanning : endDrawing}
-            onTouchStart={panMode ? startPanning : startDrawing}
-            onTouchMove={panMode ? pan : draw}
-            onTouchEnd={panMode ? endPanning : endDrawing}
+            onMouseDown={startDrawing}
+            onMouseMove={draw}
+            onMouseUp={endDrawing}
+            onMouseLeave={endDrawing}
+            onTouchStart={startDrawing}
+            onTouchMove={draw}
+            onTouchEnd={endDrawing}
           />
           <svg
             ref={svgRef}
             width={dimensions.width}
             height={dimensions.height}
+            viewBox={`0 0 ${dimensions.width * pixelRatio} ${dimensions.height * pixelRatio}`}
             className="absolute top-0 left-0 pointer-events-none select-none"
-            style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px)` }}
           >
             {paths.map((path, index) => (
               <path
