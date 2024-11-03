@@ -6,7 +6,7 @@ import { Slider } from "@/components/ui/slider"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Pencil, Play, Pause, RotateCcw, Undo, Redo, Clock, Save, Image as ImageIcon } from 'lucide-react'
+import { Pencil, Play, Pause, RotateCcw, Undo, Redo, Save, Image as ImageIcon, Hand } from 'lucide-react'
 import FileSaver from 'file-saver'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import GIF from 'gif.js'
@@ -29,12 +29,15 @@ const MIN_SIZE = 1
 const MAX_SIZE = 20
 const MIN_DURATION = 0.1
 const MAX_DURATION = 30
-const DEFAULT_DURATION = 3 // Changed to 3 seconds
-const FPS = 30
+const DEFAULT_DURATION = 3
+const FPS = 60
 
 export default function FullScreenDrawingImprovedAnimation() {
   const [isDrawing, setIsDrawing] = useState(false)
   const [isAnimating, setIsAnimating] = useState(false)
+  const [isPanning, setIsPanning] = useState(false)
+  const [panMode, setPanMode] = useState(false)
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
   const [duration, setDuration] = useState(DEFAULT_DURATION)
   const [size, setSize] = useState(DEFAULT_SIZE)
   const [paths, setPaths] = useState<Path[]>([])
@@ -48,13 +51,11 @@ export default function FullScreenDrawingImprovedAnimation() {
   const [prevPoint, setPrevPoint] = useState<{ x: number; y: number } | null>(null)
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
   const [isExporting, setIsExporting] = useState(false)
-  const [gifTransparency, setGifTransparency] = useState(false) // Changed to false by default
+  const [gifTransparency, setGifTransparency] = useState(false)
   const [svgFileName, setSvgFileName] = useState('drawing.svg')
   const [gifFileName, setGifFileName] = useState('animated-drawing.gif')
-  const [jitter, setJitter] = useState(1) // Updated initial jitter value
+  const [jitter, setJitter] = useState(0)
   const [simultaneousAnimation, setSimultaneousAnimation] = useState(false)
-  //Removed smoothing
-  //const [smoothing, setSmoothing] = useState(0.5)
 
   useEffect(() => {
     const metaViewport = document.querySelector('meta[name=viewport]')
@@ -65,6 +66,27 @@ export default function FullScreenDrawingImprovedAnimation() {
       newMetaViewport.name = 'viewport'
       newMetaViewport.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, orientation=portrait'
       document.head.appendChild(newMetaViewport)
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        e.preventDefault()
+        setPanMode(true)
+      }
+    }
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setPanMode(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
     }
   }, [])
 
@@ -83,52 +105,59 @@ export default function FullScreenDrawingImprovedAnimation() {
     return () => window.removeEventListener('resize', updateDimensions)
   }, [])
 
-  useEffect(() => {
-    if (svgRef.current && paths.length > 0) {
-      const pathElements = svgRef.current.querySelectorAll('path')
-      pathElements.forEach((pathElement) => {
-        const length = pathElement.getTotalLength()
-        pathElement.style.strokeDasharray = `${length} ${length}`
-        pathElement.style.strokeDashoffset = `${length}`
-      })
-    }
-  }, [paths])
-
   const animatePaths = useCallback(() => {
     if (!svgRef.current) return
 
     const pathElements = svgRef.current.querySelectorAll('path')
     const animationDuration = duration * 1000 // Convert duration to milliseconds
     let startTime: number | null = null
+    const totalLength = paths.reduce((sum, path) => sum + path.points.length, 0)
 
     const animate = (timestamp: number) => {
       if (!startTime) startTime = timestamp
       const elapsedTime = timestamp - startTime
+      const progress = Math.min(elapsedTime / animationDuration, 1)
 
       pathElements.forEach((pathElement, index) => {
         const originalPath = paths[index]
-        const length = pathElement.getTotalLength()
-        let progress: number
+        const pathLength = originalPath.points.length
+        let pathProgress: number
 
         if (simultaneousAnimation) {
-          progress = Math.min(elapsedTime / animationDuration, 1)
+          pathProgress = progress
         } else {
-          const totalLength = paths.reduce((sum, path) => sum + path.points.length, 0)
           const startOffset = paths.slice(0, index).reduce((sum, path) => sum + path.points.length, 0) / totalLength
-          const endOffset = (startOffset + originalPath.points.length / totalLength)
-          progress = Math.max(0, Math.min((elapsedTime / animationDuration - startOffset) / (endOffset - startOffset), 1))
+          const endOffset = startOffset + pathLength / totalLength
+          pathProgress = Math.max(0, Math.min((progress - startOffset) / (endOffset - startOffset), 1))
         }
 
-        // Use the actual shaken points
-        const visiblePoints = originalPath.points.slice(0, Math.ceil(originalPath.points.length * progress))
-        const pathData = `M ${visiblePoints.map(p => `${p.x},${p.y}`).join(' L ')}`
+        const visiblePointCount = Math.ceil(pathLength * pathProgress)
+        const visiblePoints = originalPath.points.slice(0, visiblePointCount)
+
+        // Apply smooth jitter effect
+        const jitteredPoints = visiblePoints.map((point, i) => {
+          const t = i / (visiblePointCount - 1)
+          const shake = Math.sin(t * Math.PI * 2) * jitter * (Math.random() - 0.5)
+          return { x: point.x + shake, y: point.y + shake }
+        })
+
+        // Use cubic Bezier curves for smoother path
+        const pathData = jitteredPoints.reduce((acc, point, i, arr) => {
+          if (i === 0) return `M ${point.x},${point.y}`
+          if (i === 1) return `${acc} L ${point.x},${point.y}`
+          const prev = arr[i - 1]
+          const mid = {
+            x: (prev.x + point.x) / 2,
+            y: (prev.y + point.y) / 2
+          }
+          return `${acc} Q ${prev.x},${prev.y} ${mid.x},${mid.y}`
+        }, '')
 
         pathElement.setAttribute('d', pathData)
-        pathElement.style.strokeDasharray = `${length} ${length}`
-        pathElement.style.strokeDashoffset = `${length * (1 - progress)}`
+        pathElement.style.strokeDashoffset = `${pathElement.getTotalLength() * (1 - pathProgress)}`
       })
 
-      if (elapsedTime < animationDuration) {
+      if (progress < 1) {
         animationRef.current = requestAnimationFrame(animate)
       } else {
         setIsAnimating(false)
@@ -143,7 +172,7 @@ export default function FullScreenDrawingImprovedAnimation() {
       resetAnimation()
       const timeout = setTimeout(() => {
         animatePaths()
-      }, 50) // Short delay to ensure reset has taken effect
+      }, 50)
       return () => {
         clearTimeout(timeout)
         if (animationRef.current) {
@@ -156,13 +185,18 @@ export default function FullScreenDrawingImprovedAnimation() {
   }, [isAnimating, paths, animatePaths])
 
   const startDrawing = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (panMode) {
+      startPanning(event)
+      return
+    }
+
     const canvas = canvasRef.current
     if (!canvas) return
 
     setIsDrawing(true)
     const rect = canvas.getBoundingClientRect()
-    const x = ('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left
-    const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top
+    const x = ('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left - panOffset.x
+    const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top - panOffset.y
     const time = Date.now()
     setPrevPoint({ x, y })
     setPaths(prev => {
@@ -173,6 +207,11 @@ export default function FullScreenDrawingImprovedAnimation() {
   }
 
   const draw = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (panMode) {
+      pan(event)
+      return
+    }
+
     if (!isDrawing) return
 
     const canvas = canvasRef.current
@@ -180,36 +219,37 @@ export default function FullScreenDrawingImprovedAnimation() {
     if (!canvas || !ctx || !prevPoint) return
 
     const rect = canvas.getBoundingClientRect()
-    const x = ('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left
-    const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top
+    const x = ('touches' in event ? event.touches[0].clientX : event.clientX) - rect.left - panOffset.x
+    const y = ('touches' in event ? event.touches[0].clientY : event.clientY) - rect.top - panOffset.y
 
     const time = Date.now()
-    const shake = Math.sin(time * 0.1) * jitter * 4 * (Math.random() - 0.5)
-    const newPoint = { x: x + shake, y: y + shake, time }
+    const newPoint = { x, y, time }
 
     setPaths(prev => {
       const newPaths = [...prev]
       const currentPath = newPaths[newPaths.length - 1]
       currentPath.points.push(newPoint)
 
-      // Redraw the entire path
+      // Use cubic Bezier curve for smoother drawing
+      if (currentPath.points.length > 2) {
+        const p1 = currentPath.points[currentPath.points.length - 3]
+        const p2 = currentPath.points[currentPath.points.length - 2]
+        const p3 = newPoint
+        const midPoint1 = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+        const midPoint2 = { x: (p2.x + p3.x) / 2, y: (p2.y + p3.y) / 2 }
+        currentPath.d += ` Q ${p2.x},${p2.y} ${midPoint2.x},${midPoint2.y}`
+      } else {
+        currentPath.d += ` L ${x},${y}`
+      }
+
+      // Redraw the path
       ctx.strokeStyle = currentPath.color
       ctx.lineWidth = currentPath.size
       ctx.lineCap = 'round'
       ctx.lineJoin = 'round'
-
       ctx.beginPath()
-      currentPath.points.forEach((point, index) => {
-        if (index === 0) {
-          ctx.moveTo(point.x, point.y)
-        } else {
-          ctx.lineTo(point.x, point.y)
-        }
-      })
-      ctx.stroke()
-
-      // Update the SVG path
-      currentPath.d = `M ${currentPath.points.map(p => `${p.x},${p.y}`).join(' L ')}`
+      const path = new Path2D(currentPath.d)
+      ctx.stroke(path)
 
       return newPaths
     })
@@ -219,6 +259,33 @@ export default function FullScreenDrawingImprovedAnimation() {
 
   const endDrawing = () => {
     setIsDrawing(false)
+    setPrevPoint(null)
+  }
+
+  const startPanning = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    setIsPanning(true)
+    const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX
+    const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY
+    setPrevPoint({ x: clientX, y: clientY })
+  }
+
+  const pan = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isPanning || !prevPoint) return
+
+    const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX
+    const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY
+
+    const dx = clientX - prevPoint.x
+    const dy = clientY - prevPoint.y
+
+    setPanOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }))
+    setPrevPoint({ x: clientX, y: clientY })
+
+    redrawCanvas()
+  }
+
+  const endPanning = () => {
+    setIsPanning(false)
     setPrevPoint(null)
   }
 
@@ -232,6 +299,7 @@ export default function FullScreenDrawingImprovedAnimation() {
     setUndoStack([])
     setRedoStack([])
     setIsAnimating(false)
+    setPanOffset({ x: 0, y: 0 })
   }
 
   const toggleAnimation = () => {
@@ -260,24 +328,24 @@ export default function FullScreenDrawingImprovedAnimation() {
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
 
+    ctx.save()
+    ctx.translate(panOffset.x, panOffset.y)
+
     paths.forEach(path => {
       ctx.strokeStyle = path.color
       ctx.lineWidth = path.size
       ctx.beginPath()
-      path.points.forEach((point, index) => {
-        if (index === 0) {
-          ctx.moveTo(point.x, point.y)
-        } else {
-          ctx.lineTo(point.x, point.y)
-        }
-      })
-      ctx.stroke()
+      const pathObj = new Path2D(path.d)
+      ctx.stroke(pathObj)
     })
+
+    ctx.restore()
   }
 
   const undo = () => {
     if (undoStack.length === 0) return
     const previousPaths = undoStack[undoStack.length - 1]
+    
     setUndoStack(undoStack.slice(0, -1))
     setRedoStack([...redoStack, paths])
     setPaths(previousPaths)
@@ -319,7 +387,7 @@ export default function FullScreenDrawingImprovedAnimation() {
 
   const downloadSVG = () => {
     if (svgRef.current) {
-      const svgClone = svgRef.current.cloneNode(true) as SVGSVGElement
+      const svgClone = svgRef.current.cloneNode(true) as  SVGSVGElement
 
       // Create a temporary canvas to determine the bounding box
       const tempCanvas = document.createElement('canvas')
@@ -329,6 +397,8 @@ export default function FullScreenDrawingImprovedAnimation() {
       if (!tempCtx) return
 
       // Draw all paths to determine the bounding box
+      tempCtx.save()
+      tempCtx.translate(panOffset.x, panOffset.y)
       paths.forEach(path => {
         tempCtx.strokeStyle = path.color
         tempCtx.lineWidth = path.size
@@ -337,13 +407,14 @@ export default function FullScreenDrawingImprovedAnimation() {
         const pathData = new Path2D(path.d)
         tempCtx.stroke(pathData)
       })
+      tempCtx.restore()
 
       const { minX, minY, maxX, maxY } = getBoundingBox(tempCtx, dimensions.width, dimensions.height)
       const cropWidth = maxX - minX + 20  // Add some padding
       const cropHeight = maxY - minY + 20 // Add some padding
 
       // Update SVG viewBox and size
-      svgClone.setAttribute('viewBox', `${minX - 10} ${minY - 10} ${cropWidth} ${cropHeight}`)
+      svgClone.setAttribute('viewBox', `${minX - 10 - panOffset.x} ${minY - 10 - panOffset.y} ${cropWidth} ${cropHeight}`)
       svgClone.setAttribute('width', cropWidth.toString())
       svgClone.setAttribute('height', cropHeight.toString())
 
@@ -366,6 +437,8 @@ export default function FullScreenDrawingImprovedAnimation() {
     if (!tempCtx) return
 
     // Draw all paths to determine the bounding box
+    tempCtx.save()
+    tempCtx.translate(panOffset.x, panOffset.y)
     paths.forEach(path => {
       tempCtx.strokeStyle = path.color
       tempCtx.lineWidth = path.size
@@ -374,6 +447,7 @@ export default function FullScreenDrawingImprovedAnimation() {
       const pathData = new Path2D(path.d)
       tempCtx.stroke(pathData)
     })
+    tempCtx.restore()
 
     const { minX, minY, maxX, maxY } = getBoundingBox(tempCtx, dimensions.width, dimensions.height)
     const cropWidth = maxX - minX + 20  // Add some padding
@@ -413,9 +487,27 @@ export default function FullScreenDrawingImprovedAnimation() {
           pathProgress = Math.max(0, Math.min((progress - startOffset) / (endOffset - startOffset), 1))
         }
 
-        // Use the actual shaken points
-        const visiblePoints = originalPath.points.slice(0, Math.ceil(originalPath.points.length * pathProgress))
-        const pathData = `M ${visiblePoints.map(p => `${p.x},${p.y}`).join(' L ')}`
+        const visiblePointCount = Math.ceil(originalPath.points.length * pathProgress)
+        const visiblePoints = originalPath.points.slice(0, visiblePointCount)
+
+        // Apply smooth jitter effect
+        const jitteredPoints = visiblePoints.map((point, i) => {
+          const t = i / (visiblePointCount - 1)
+          const shake = Math.sin(t * Math.PI * 2) * jitter * (Math.random() - 0.5)
+          return { x: point.x + shake, y: point.y + shake }
+        })
+
+        // Use cubic Bezier curves for smoother path
+        const pathData = jitteredPoints.reduce((acc, point, i, arr) => {
+          if (i === 0) return `M ${point.x},${point.y}`
+          if (i === 1) return `${acc} L ${point.x},${point.y}`
+          const prev = arr[i - 1]
+          const mid = {
+            x: (prev.x + point.x) / 2,
+            y: (prev.y + point.y) / 2
+          }
+          return `${acc} Q ${prev.x},${prev.y} ${mid.x},${mid.y}`
+        }, '')
 
         pathElement.setAttribute('d', pathData)
         pathElement.style.strokeDasharray = `${length} ${length}`
@@ -437,7 +529,7 @@ export default function FullScreenDrawingImprovedAnimation() {
               ctx.fillStyle = '#ffffff'
               ctx.fillRect(0, 0, cropWidth, cropHeight)
             }
-            ctx.drawImage(img, -minX + 10, -minY + 10) // Adjust for padding
+            ctx.drawImage(img, -minX + 10 - panOffset.x, -minY + 10 - panOffset.y) // Adjust for padding and pan offset
             gif.addFrame(canvas, { copy: true, delay: 1000 / FPS })
           }
           resolve()
@@ -462,19 +554,20 @@ export default function FullScreenDrawingImprovedAnimation() {
             width={dimensions.width}
             height={dimensions.height}
             className={`touch-none select-none ${isAnimating ? 'hidden' : 'block'}`}
-            onMouseDown={startDrawing}
-            onMouseMove={draw}
-            onMouseUp={endDrawing}
-            onMouseLeave={endDrawing}
-            onTouchStart={startDrawing}
-            onTouchMove={draw}
-            onTouchEnd={endDrawing}
+            onMouseDown={panMode ? startPanning : startDrawing}
+            onMouseMove={panMode ? pan : draw}
+            onMouseUp={panMode ? endPanning : endDrawing}
+            onMouseLeave={panMode ? endPanning : endDrawing}
+            onTouchStart={panMode ? startPanning : startDrawing}
+            onTouchMove={panMode ? pan : draw}
+            onTouchEnd={panMode ? endPanning : endDrawing}
           />
           <svg
             ref={svgRef}
             width={dimensions.width}
             height={dimensions.height}
             className="absolute top-0 left-0 pointer-events-none select-none"
+            style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px)` }}
           >
             {paths.map((path, index) => (
               <path
@@ -491,8 +584,8 @@ export default function FullScreenDrawingImprovedAnimation() {
         </div>
 
         {/* Bottom Toolbar */}
-        <div className="flex items-center justify-between p-4 bg-background border-t border-border h-20">
-          <div className="flex items-center gap-4">
+        <div className="flex items-center justify-between p-2 bg-background border-t border-border h-16">
+          <div className="flex items-center gap-2">
             <Button
               variant="outline"
               size="icon"
@@ -586,7 +679,6 @@ export default function FullScreenDrawingImprovedAnimation() {
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="jitter-slider">Shake Intensity:</Label>
-                    {/* Updated jitter slider */}
                     <Slider
                       id="jitter-slider"
                       min={0}
@@ -599,13 +691,21 @@ export default function FullScreenDrawingImprovedAnimation() {
                       }}
                     />
                   </div>
-                  {/* Removed smoothing slider */}
                 </div>
               </PopoverContent>
             </Popover>
+            <Button
+              variant={panMode ? "secondary" : "outline"}
+              size="icon"
+              onClick={() => setPanMode(!panMode)}
+              aria-label={panMode ? "Disable pan mode" : "Enable pan mode"}
+              className="h-8 w-8"
+            >
+              <Hand className="h-4 w-4" />
+            </Button>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center">
               <Label htmlFor="duration-input" className="sr-only">Animation duration (seconds)</Label>
               <div className="relative">
                 <Input
@@ -616,77 +716,78 @@ export default function FullScreenDrawingImprovedAnimation() {
                   step={0.1}
                   value={duration}
                   onChange={handleDurationChange}
-                  className="w-16 pr-6"
+                  className="w-14 pr-5 h-8 text-xs"
                 />
-                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">s</span>
+                <span className="absolute right-1 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">s</span>
               </div>
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    aria-label="Download options"
-                  >
-                    <Save className="h-4 w-4" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-72">
-                  <div className="grid gap-4">
-                    <div className="grid gap-2">
-                      <Label htmlFor="svg-filename">SVG Filename</Label>
-                      <div className="flex gap-2">
-                        <Input
-                          id="svg-filename"
-                          value={svgFileName}
-                          onChange={(e) => setSvgFileName(e.target.value)}
-                          className="flex-grow"
-                        />
-                        <Button onClick={downloadSVG} size="icon" aria-label="Download SVG">
-                          <Save className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="gif-filename">GIF Filename</Label>
-                      <div className="flex gap-2">
-                        <Input
-                          id="gif-filename"
-                          value={gifFileName}
-                          onChange={(e) => setGifFileName(e.target.value)}
-                          className="flex-grow"
-                        />
-                        <Button onClick={downloadGIF} size="icon" aria-label="Download GIF">
-                          <ImageIcon className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <Switch
-                        id="gif-transparency"
-                        checked={gifTransparency}
-                        onCheckedChange={setGifTransparency}
+            </div>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label="Download options"
+                >
+                  <Save className="h-4 w-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-72">
+                <div className="grid gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="svg-filename">SVG Filename</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="svg-filename"
+                        value={svgFileName}
+                        onChange={(e) => setSvgFileName(e.target.value)}
+                        className="flex-grow"
                       />
-                      <Label htmlFor="gif-transparency">GIF Transparency</Label>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <Switch
-                        id="animation-mode"
-                        checked={simultaneousAnimation}
-                        onCheckedChange={setSimultaneousAnimation}
-                      />
-                      <Label htmlFor="animation-mode">Animate All Paths Simultaneously</Label>
+                      <Button onClick={downloadSVG} size="icon" aria-label="Download SVG">
+                        <Save className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
-                </PopoverContent>
-              </Popover>
-            </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="gif-filename">GIF Filename</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="gif-filename"
+                        value={gifFileName}
+                        onChange={(e) => setGifFileName(e.target.value)}
+                        className="flex-grow"
+                      />
+                      <Button onClick={downloadGIF} size="icon" aria-label="Download GIF">
+                        <ImageIcon className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      id="gif-transparency"
+                      checked={gifTransparency}
+                      onCheckedChange={setGifTransparency}
+                    />
+                    <Label htmlFor="gif-transparency">GIF Transparency</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      id="animation-mode"
+                      checked={simultaneousAnimation}
+                      onCheckedChange={setSimultaneousAnimation}
+                    />
+                    <Label htmlFor="animation-mode">Animate All Paths Simultaneously</Label>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
             <Button
               variant="outline"
               size="icon"
               onClick={toggleAnimation}
               disabled={paths.length === 0}
               aria-label={isAnimating ? "Stop animation" : "Start animation"}
+              className="h-8 w-8"
             >
               {isAnimating ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
             </Button>
@@ -695,4 +796,4 @@ export default function FullScreenDrawingImprovedAnimation() {
       </div>
     </TooltipProvider>
   )
-}
+}            
